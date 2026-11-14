@@ -4,11 +4,15 @@ import re
 import datetime
 import tempfile
 import shutil
+import io
 from flask import Flask, request, send_file, render_template_string
 import openpyxl
 import exifread
+from PIL import Image
 
 app = Flask(__name__)
+# 50MBまでのアップロードを許可（Vercelのhobbyプランは実質4.5MB制限ですが、Flask側でも一応制限を緩めておきます）
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -28,20 +32,22 @@ HTML_TEMPLATE = '''
         button { width: 100%; background: #0070f3; color: white; border: none; padding: 14px; font-size: 1rem; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; margin-top: 10px; }
         button:hover { background: #005bb5; }
         .footer { text-align: center; margin-top: 20px; font-size: 0.8rem; color: #999; }
+        .warning { color: #d32f2f; font-size: 0.85rem; margin-top: 10px; text-align: center; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📸 写真データ自動記録</h1>
         <p class="description">エクセルテンプレートと写真を選択すると、<br>メタデータを自動入力したファイルがダウンロードされます。</p>
+        <p class="warning">⚠️ Vercelの無料プラン制限により、写真2枚の合計サイズは 4.5MB 以下にしてください。<br>（大きなRAWデータや高画質JPEGは事前に圧縮・縮小してください）</p>
         <form action="/process" method="post" enctype="multipart/form-data">
             <div class="form-group">
                 <label>1. エクセルテンプレート (.xlsx)</label>
                 <input type="file" name="excel_file" accept=".xlsx" required>
             </div>
             <div class="form-group">
-                <label>2. 写真データ (最大2枚選択)</label>
-                <input type="file" name="photos" accept="image/*,.cr2,.cr3,.arw,.nef" multiple required>
+                <label>2. 写真データ (最大2枚, 1枚2MB推奨)</label>
+                <input type="file" name="photos" accept="image/jpeg,image/png" multiple required>
             </div>
             <button type="submit">自動入力してダウンロード</button>
         </form>
@@ -162,8 +168,9 @@ def process():
         items_to_add = []
         for p in photos:
             if not p.filename: continue
+            
+            # EXIF抽出のためにバイナリデータを読み込む
             file_data = p.read()
-            import io
             exif_info = ExifExtractor.extract(io.BytesIO(file_data), p.filename)
             if exif_info["valid"]:
                 items_to_add.append(exif_info)
